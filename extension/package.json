@@ -1,0 +1,134 @@
+{
+  "name": "gpu-queue",
+  "displayName": "gpu-queue",
+  "description": "Job queue for a shared GPU machine: queue tree, live logs, cancel/requeue",
+  "version": "0.1.0",
+  "publisher": "fernando",
+  "license": "MIT",
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./out/extension.js",
+  "extensionKind": [
+    "workspace"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "gpuQueue",
+          "title": "GPU Queue",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "gpuQueue": [
+        {
+          "id": "gpuQueueJobs",
+          "name": "Jobs",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "gpuQueue.refresh",
+        "title": "gpu-queue: Refresh",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "gpuQueue.showLogs",
+        "title": "gpu-queue: Show Job Logs"
+      },
+      {
+        "command": "gpuQueue.cancel",
+        "title": "gpu-queue: Cancel Job",
+        "icon": "$(stop-circle)"
+      },
+      {
+        "command": "gpuQueue.requeue",
+        "title": "gpu-queue: Requeue Job",
+        "icon": "$(debug-restart)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "gpuQueue.refresh",
+          "when": "view == gpuQueueJobs",
+          "group": "navigation"
+        }
+      ],
+      "view/item/context": [
+        {
+          "command": "gpuQueue.cancel",
+          "when": "view == gpuQueueJobs && viewItem =~ /job-(queued|running)/",
+          "group": "inline"
+        },
+        {
+          "command": "gpuQueue.requeue",
+          "when": "view == gpuQueueJobs && viewItem == job-finished",
+          "group": "inline"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "gpuQueue.cancel",
+          "when": "false"
+        },
+        {
+          "command": "gpuQueue.requeue",
+          "when": "false"
+        },
+        {
+          "command": "gpuQueue.showLogs",
+          "when": "false"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "gpu-queue",
+      "properties": {
+        "gpuQueue.port": {
+          "type": "number",
+          "default": 47563,
+          "description": "Port of the gpu-queue daemon API on localhost (GQ_PORT)."
+        },
+        "gpuQueue.pollIntervalMs": {
+          "type": "number",
+          "default": 2000,
+          "minimum": 500,
+          "description": "How often to poll the daemon for queue/GPU state."
+        },
+        "gpuQueue.finishedLimit": {
+          "type": "number",
+          "default": 15,
+          "description": "How many finished jobs to show in the tree."
+        },
+        "gpuQueue.notifyOnCompletion": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a notification when a running job finishes."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "package": "vsce package --no-dependencies"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.0.0",
+    "typescript": "^5.4.0"
+  }
+}
