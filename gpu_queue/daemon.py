@@ -19,7 +19,7 @@ from . import __version__, api_port, db_path, gq_home
 from . import db as dbm
 from .api import serve
 from .db import Database, Job
-from .runner import job_log_path, kill_tree, launch, pid_alive, read_exit_code
+from .runner import group_alive, job_log_path, kill_tree, launch, read_exit_code
 from .scheduler import Scheduler, externally_busy, make_monitor, _our_pgids
 
 POLL_S = float(os.environ.get("GQ_POLL_S", "2"))
@@ -36,13 +36,19 @@ class Daemon:
         self.popens: Dict[int, subprocess.Popen] = {}
         self.lock = threading.RLock()  # guards job state transitions
         self._stop = threading.Event()
-        self.last_gpu_snapshot = []
+        self._stragglers_killed: set = set()
+        self.last_gpu_snapshot = self.monitor.snapshot()
 
     # -- actions (called from API threads and the loop) ---------------------
 
     def submit(self, name, command, workdir, env, gpus, conda_env=None) -> Job:
         if gpus < 0:
             raise ValueError("gpus must be >= 0")
+        total = len(self.last_gpu_snapshot)
+        if gpus > total:
+            raise ValueError(
+                f"job wants {gpus} GPUs but this machine only has {total}"
+            )
         if not command:
             raise ValueError("empty command")
         if not os.path.isdir(workdir):
@@ -115,11 +121,13 @@ class Daemon:
     def recover(self) -> None:
         """Reconcile DB vs live pids after a daemon restart."""
         for job in self.db.jobs_in_state(dbm.RUNNING):
-            if job.pid and pid_alive(job.pid):
+            exit_code = read_exit_code(job.id)
+            # The exit file is authoritative: if it exists the job finished,
+            # even if the pid "looks" alive (it may have been reused).
+            if exit_code is None and job.pid and group_alive(job.pid):
                 log.info("job %d re-adopted (pid %d still running)", job.id, job.pid)
                 continue  # reaper tracks it via pid + exit file
-            self._finalize(job, read_exit_code(job.id),
-                           note="finished while daemon was down")
+            self._finalize(job, exit_code, note="finished while daemon was down")
 
     # -- loop ----------------------------------------------------------------
 
@@ -134,30 +142,42 @@ class Daemon:
                 note = note or "exit code unknown (process killed?)"
         self.db.mark_finished(job.id, state, exit_code, note)
         self.popens.pop(job.id, None)
+        self._stragglers_killed.discard(job.id)
         log.info("job %d finished: %s (exit=%s)", job.id, state, exit_code)
 
     def _reap(self) -> None:
         now = time.time()
         for job in self.db.jobs_in_state(dbm.RUNNING):
             popen = self.popens.get(job.id)
-            if popen is not None:
-                rc = popen.poll()
-                if rc is None:
-                    dead = False
-                else:
-                    dead = True
-                    exit_code = read_exit_code(job.id)
-                    if exit_code is None:
-                        exit_code = rc
-            else:  # adopted after daemon restart
-                dead = job.pid is None or not pid_alive(job.pid)
-                exit_code = read_exit_code(job.id) if dead else None
-            if dead:
-                self._finalize(job, exit_code)
+            rc = popen.poll() if popen is not None else None  # reaps the zombie
+            file_code = read_exit_code(job.id)
+            wrapper_done = file_code is not None or rc is not None
+
+            if popen is None and wrapper_done:
+                # Adopted job whose wrapper finished. Don't trust the pid —
+                # it may have been reused by an unrelated process — so
+                # finalize from the exit file and touch nothing.
+                self._finalize(job, file_code)
+            elif job.pid is None or not group_alive(job.pid):
+                # Whole process tree is gone: the job is truly over.
+                if file_code is None:
+                    file_code = read_exit_code(job.id)  # may have just landed
+                if file_code is None and popen is not None:
+                    file_code = popen.poll()
+                self._finalize(job, file_code)
+            elif (
+                wrapper_done
+                and job.cancel_requested_at is None
+                and job.id not in self._stragglers_killed
+            ):
+                # Script finished but left children behind (e.g. `cmd &`
+                # without wait): slurm-style cleanup of the rest of the tree.
+                log.info("job %d script exited, killing leftover processes", job.id)
+                self._stragglers_killed.add(job.id)
+                kill_tree(job.pid, signal.SIGKILL)
             elif (
                 job.cancel_requested_at is not None
                 and now - job.cancel_requested_at > CANCEL_GRACE_S
-                and job.pid
             ):
                 log.info("job %d ignored SIGTERM for %.0fs, sending SIGKILL",
                          job.id, CANCEL_GRACE_S)

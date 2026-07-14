@@ -14,7 +14,7 @@ import gpu_queue.daemon as daemon_mod
 from gpu_queue import db as dbm
 from gpu_queue.daemon import Daemon
 from gpu_queue.db import Database
-from gpu_queue.runner import pid_alive
+from gpu_queue.runner import group_alive, pid_alive
 
 
 def free_port():
@@ -109,6 +109,37 @@ def test_fifo_queueing_two_gpus(gq):
     assert {ledger[0]["state"], ledger[1]["state"]} == {"allocated"}
     for jid in (a["id"], b["id"], c["id"]):
         api("POST", f"/api/jobs/{jid}/cancel")
+
+
+def test_cancel_escalates_to_sigkill_for_term_ignoring_jobs(gq):
+    # a child that ignores SIGTERM must keep the job RUNNING through the
+    # grace period, then be SIGKILLed and only then marked CANCELLED
+    job = submit(["bash", "-c", 'trap "" TERM; while :; do sleep 1; done'])
+    wait_for(lambda: job_state(job["id"]) == dbm.RUNNING, msg="RUNNING")
+    pid = api("GET", f"/api/jobs/{job['id']}")["pid"]
+    api("POST", f"/api/jobs/{job['id']}/cancel")
+    time.sleep(0.3)
+    assert job_state(job["id"]) == dbm.RUNNING  # inside grace, TERM ignored
+    wait_for(lambda: job_state(job["id"]) == dbm.CANCELLED, msg="CANCELLED after grace")
+    wait_for(lambda: not group_alive(pid), timeout=5, msg="process group dead")
+
+
+def test_straggler_children_killed_when_script_exits(gq):
+    # script backgrounds a child and exits; the child must be cleaned up
+    # before the job is finalized (slurm-style)
+    job = submit(["bash", "-c", "sleep 60 & echo bye"])
+    wait_for(lambda: job_state(job["id"]) == dbm.DONE, msg="DONE")
+    pid = api("GET", f"/api/jobs/{job['id']}")["pid"]
+    assert not group_alive(pid)
+    assert api("GET", f"/api/jobs/{job['id']}")["exit_code"] == 0
+
+
+def test_submit_more_gpus_than_machine_rejected(gq):
+    import urllib.error
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        submit(["true"], gpus=99)
+    assert exc.value.code == 400
 
 
 def test_cancel_kills_process_tree(gq):

@@ -75,6 +75,18 @@ def pid_alive(pid: int) -> bool:
         return True
 
 
+def group_alive(pgid: int) -> bool:
+    """True while any process in the job's group is alive (the job's real
+    extent — the wrapper can die while grandchildren keep running)."""
+    try:
+        os.killpg(pgid, 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
 def kill_tree(pid: int, sig: int = signal.SIGTERM) -> None:
     """Signal the job's whole process group (pgid == pid, we setsid'd)."""
     try:

@@ -123,6 +123,8 @@ class Handler(BaseHTTPRequestHandler):
         for key in ("command", "workdir", "env"):
             if key not in body:
                 raise ApiError(400, f"missing field {key!r}")
+        if not body["command"]:
+            raise ApiError(400, "empty command")
         job = self.daemon_obj.submit(
             name=body.get("name") or _default_name(body["command"]),
             command=body["command"],

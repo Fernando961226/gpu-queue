@@ -146,7 +146,8 @@ def cmd_ls(args) -> int:
     else:
         active = _get("/api/jobs?state=QUEUED,RUNNING")
         recent = _get("/api/jobs?state=DONE,FAILED,CANCELLED&limit=5")
-        jobs = active + recent
+        # a job can finish between the two requests and show up in both
+        jobs = list({j["id"]: j for j in active + recent}.values())
     jobs.sort(key=lambda j: j["id"])
     rows = []
     for j in jobs:
@@ -171,7 +172,9 @@ def cmd_logs(args) -> int:
             sys.stdout.buffer.write(data)
             sys.stdout.buffer.flush()
         if not args.follow:
-            return 0
+            if not data:
+                return 0
+            continue  # logs are chunked; keep draining until caught up
         if state not in ("QUEUED", "RUNNING") and not data:
             return 0  # job over and log drained
         time.sleep(1)
@@ -223,6 +226,10 @@ Description=gpu-queue daemon (mini-Slurm for this machine)
 ExecStart={gqd}
 Restart=on-failure
 RestartSec=3
+# Signal only the daemon on stop/restart — jobs live in the same cgroup and
+# must survive daemon restarts (they're reconciled by pid on startup).
+KillMode=process
+TimeoutStopSec=15
 
 [Install]
 WantedBy=default.target
@@ -314,13 +321,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv=None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
-    # argparse.REMAINDER swallows the leading `--`; remember whether it was
-    # there so submit can tell "inline command" from "script file".
-    saw_dashdash = "--" in argv
     parser = build_parser()
     args = parser.parse_args(argv)
-    args.saw_dashdash = saw_dashdash
-    if getattr(args, "command", None) and args.command[0] == "--":
+    # A `--` *leading* the remainder marks an inline command; a `--` later in
+    # the argv belongs to the job (e.g. `gq submit job.sh -- --flag`).
+    args.saw_dashdash = bool(getattr(args, "command", None)) and args.command[0] == "--"
+    if args.saw_dashdash:
         args.command = args.command[1:]
     try:
         return args.fn(args)
