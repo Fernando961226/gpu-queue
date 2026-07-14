@@ -20,11 +20,14 @@ export function activate(context: vscode.ExtensionContext): void {
     tailer,
 
     vscode.commands.registerCommand("gpuQueue.refresh", () => refresh()),
-    vscode.commands.registerCommand("gpuQueue.showLogs", async (arg: number | JobItem) => {
-      const jobId = typeof arg === "number" ? arg : arg.job.id;
-      const name = typeof arg === "number" ? String(arg) : arg.job.name;
-      await tailer.open(jobId, name);
-    }),
+    vscode.commands.registerCommand(
+      "gpuQueue.showLogs",
+      async (arg: number | JobItem, name?: string) => {
+        const jobId = typeof arg === "number" ? arg : arg.job.id;
+        const jobName = typeof arg === "number" ? name ?? String(arg) : arg.job.name;
+        await tailer.open(jobId, jobName);
+      }
+    ),
     vscode.commands.registerCommand("gpuQueue.cancel", async (item: JobItem) => {
       try {
         await api.cancel(item.job.id);
@@ -126,6 +129,13 @@ class CompletionNotifier {
         void this.announce(job);
       }
     }
+    // forget jobs that scrolled out of the visible window
+    const visible = new Set(jobs.map((j) => j.id));
+    for (const id of [...this.lastState.keys()]) {
+      if (!visible.has(id)) {
+        this.lastState.delete(id);
+      }
+    }
   }
 
   private async announce(job: Job): Promise<void> {
@@ -139,7 +149,7 @@ class CompletionNotifier {
             "Requeue"
           );
     if (action === "Open logs") {
-      void vscode.commands.executeCommand("gpuQueue.showLogs", job.id);
+      void vscode.commands.executeCommand("gpuQueue.showLogs", job.id, job.name);
     } else if (action === "Requeue") {
       try {
         await this.api.requeue(job.id);

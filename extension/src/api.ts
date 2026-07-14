@@ -31,7 +31,9 @@ export interface Gpu {
 }
 
 export interface LogChunk {
-  text: string;
+  /** Raw bytes: chunk boundaries can split UTF-8 sequences, so decoding is
+   * the caller's job (with a streaming TextDecoder). */
+  bytes: Uint8Array;
   nextOffset: number;
   jobState: string;
 }
@@ -97,9 +99,9 @@ export class GqApi {
     if (!resp.ok) {
       throw new Error(await errorMessage(resp));
     }
-    const text = await resp.text();
+    const bytes = new Uint8Array(await resp.arrayBuffer());
     return {
-      text,
+      bytes,
       nextOffset: Number(resp.headers.get("X-Log-Offset") ?? offset),
       jobState: resp.headers.get("X-Job-State") ?? "",
     };

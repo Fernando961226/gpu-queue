@@ -30,7 +30,7 @@ export class JobItem extends vscode.TreeItem {
     this.command = {
       command: "gpuQueue.showLogs",
       title: "Show Logs",
-      arguments: [job.id],
+      arguments: [job.id, job.name],
     };
   }
 }
