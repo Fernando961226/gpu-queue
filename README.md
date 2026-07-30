@@ -17,9 +17,24 @@ gq gpus
 ## Install
 
 ```bash
-pip install -e .
+curl -fsSL https://raw.githubusercontent.com/Fernando961226/gpu-queue/main/install.sh | bash
 gq daemon start           # installs + starts a systemd user service
 ```
+
+No prerequisites beyond `python3` and `curl` — nothing to install first, and
+nothing added to your conda envs. The installer builds a private venv at
+`~/.local/share/gpu-queue/venv` (preferring the *system* python, so the daemon
+doesn't depend on conda) and symlinks `gq`/`gqd` into `~/.local/bin`.
+
+| Command | Effect |
+|---------|--------|
+| `install.sh` | install, or upgrade in place if already installed |
+| `install.sh --with-daemon` | also enable + start the systemd user service |
+| `install.sh --dev` | editable install + test deps, from a local checkout |
+| `install.sh --uninstall` | remove the venv, symlinks, and service (keeps `~/.gpu-queue`) |
+
+Overridable via `GQ_PREFIX`, `GQ_BIN_DIR`, `GQ_PYTHON`. If `uv` happens to be
+installed it's used for speed; it is never required.
 
 ## How it works
 
@@ -60,10 +75,11 @@ python train.py --lr 1e-4
 ## Development
 
 ```bash
-pip install -e ".[dev]"
-python -m pytest tests/
+git clone https://github.com/Fernando961226/gpu-queue.git && cd gpu-queue
+./install.sh --dev                   # editable venv + pytest
+~/.local/share/gpu-queue/venv/bin/python -m pytest tests/
 GQ_FAKE_GPUS=4 GQ_HOME=/tmp/gq gqd   # daemon with fake GPUs, foreground
 ```
 
 See `CLAUDE.md` for the full design and build plan. The VSCode extension
-(job tree + live log tail) lives in `extension/` (build step 3, upcoming).
+(job tree + live log tail) lives in `extension/`.
