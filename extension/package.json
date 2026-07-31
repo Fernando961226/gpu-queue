@@ -31,6 +31,11 @@
     "views": {
       "gpuQueue": [
         {
+          "id": "gpuQueueGpus",
+          "name": "GPUs",
+          "icon": "media/icon.svg"
+        },
+        {
           "id": "gpuQueueJobs",
           "name": "Jobs",
           "icon": "media/icon.svg"
@@ -62,7 +67,7 @@
       "view/title": [
         {
           "command": "gpuQueue.refresh",
-          "when": "view == gpuQueueJobs",
+          "when": "view == gpuQueueJobs || view == gpuQueueGpus",
           "group": "navigation"
         }
       ],
@@ -116,6 +121,12 @@
           "type": "boolean",
           "default": true,
           "description": "Show a notification when a running job finishes."
+        },
+        "gpuQueue.gpuHistoryLength": {
+          "type": "number",
+          "default": 30,
+          "minimum": 2,
+          "description": "Utilisation samples kept per GPU for the sparkline in the GPU tooltip (30 samples ≈ 60s at the default poll interval)."
         }
       }
     }

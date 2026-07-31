@@ -1,11 +1,13 @@
 import * as vscode from "vscode";
 import { GqApi, Job } from "./api";
+import { GpuTreeProvider } from "./gpus";
 import { LogTailer, SCHEME } from "./logs";
 import { JobItem, JobTreeProvider } from "./tree";
 
 export function activate(context: vscode.ExtensionContext): void {
   const api = new GqApi();
   const tree = new JobTreeProvider();
+  const gpuTree = new GpuTreeProvider();
   const tailer = new LogTailer(api);
   const notifier = new CompletionNotifier(api);
 
@@ -15,6 +17,7 @@ export function activate(context: vscode.ExtensionContext): void {
 
   context.subscriptions.push(
     vscode.window.registerTreeDataProvider("gpuQueueJobs", tree),
+    vscode.window.registerTreeDataProvider("gpuQueueGpus", gpuTree),
     vscode.workspace.registerTextDocumentContentProvider(SCHEME, tailer),
     statusBar,
     tailer,
@@ -59,6 +62,7 @@ export function activate(context: vscode.ExtensionContext): void {
       ]);
       const jobs = dedupe([...active, ...finished]);
       tree.update(jobs, false);
+      gpuTree.update(gpus, jobs, false);
       notifier.observe(jobs);
 
       const running = jobs.filter((j) => j.state === "RUNNING").length;
@@ -68,6 +72,7 @@ export function activate(context: vscode.ExtensionContext): void {
       statusBar.tooltip = `gpu-queue: ${running} running, ${queued} queued, ${free} of ${gpus.length} GPUs free`;
     } catch {
       tree.update([], true);
+      gpuTree.update([], [], true);
       statusBar.text = "$(debug-disconnect) gq: offline";
       statusBar.tooltip = "gpu-queue daemon not reachable — run `gq daemon start`";
     }

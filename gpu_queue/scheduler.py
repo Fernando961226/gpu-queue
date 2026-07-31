@@ -13,7 +13,7 @@ reserved for it so they can accumulate instead of being backfilled forever.
 import os
 import time
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Set
+from typing import Dict, List, Optional, Sequence, Set, Tuple
 
 from .db import Job
 
@@ -48,12 +48,26 @@ class NvmlMonitor(GpuMonitor):
         pynvml.nvmlInit()
         self._count = pynvml.nvmlDeviceGetCount()
 
+    def _mem_used_total_mb(self, h) -> Tuple[int, int]:
+        """VRAM (used, total) in MB, excluding driver-reserved memory.
+
+        NVML's v1 struct folds ~600MB of reserved memory into `used`, which
+        reads as 13% utilisation on an idle GPU. v2 splits it out; fall back
+        to v1 on drivers that lack it.
+        """
+        nvml = self._nvml
+        try:
+            m = nvml.nvmlDeviceGetMemoryInfo(h, version=nvml.nvmlMemory_v2)
+        except (nvml.NVMLError, AttributeError, TypeError):
+            m = nvml.nvmlDeviceGetMemoryInfo(h)
+        return m.used // (1024 * 1024), m.total // (1024 * 1024)
+
     def snapshot(self) -> List[GpuInfo]:
         nvml = self._nvml
         gpus = []
         for i in range(self._count):
             h = nvml.nvmlDeviceGetHandleByIndex(i)
-            mem = nvml.nvmlDeviceGetMemoryInfo(h)
+            mem_used_mb, mem_total_mb = self._mem_used_total_mb(h)
             try:
                 util = nvml.nvmlDeviceGetUtilizationRates(h).gpu
             except nvml.NVMLError:
@@ -73,8 +87,8 @@ class NvmlMonitor(GpuMonitor):
                 GpuInfo(
                     index=i,
                     name=name,
-                    mem_used_mb=mem.used // (1024 * 1024),
-                    mem_total_mb=mem.total // (1024 * 1024),
+                    mem_used_mb=mem_used_mb,
+                    mem_total_mb=mem_total_mb,
                     util_pct=util,
                     compute_procs=procs,
                 )
