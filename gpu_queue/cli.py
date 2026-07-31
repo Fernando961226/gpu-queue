@@ -1,6 +1,7 @@
 """`gq` — the gpu-queue CLI. Talks to the daemon over the localhost API."""
 
 import argparse
+import getpass
 import json
 import os
 import subprocess
@@ -243,12 +244,44 @@ def _systemctl(*args) -> int:
     return subprocess.call(["systemctl", "--user", *args])
 
 
+def _ensure_linger() -> None:
+    """Keep the systemd user manager alive without an active login session.
+
+    Without linger the user manager — and so the daemon — stops when the last
+    SSH session ends, which for a job queue means queued jobs stop dispatching
+    the moment you disconnect, and nothing comes back after a reboot. Best
+    effort: on machines where polkit refuses, tell the user how to fix it.
+    """
+    user = getpass.getuser()
+    try:
+        out = subprocess.run(
+            ["loginctl", "show-user", user, "--property=Linger"],
+            capture_output=True, text=True, timeout=10,
+        )
+        if out.stdout.strip() == "Linger=yes":
+            return
+        rc = subprocess.call(
+            ["loginctl", "enable-linger", user],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        rc = 1
+    if rc != 0:
+        print(
+            f"warning: could not enable linger for {user}. The daemon will stop\n"
+            f"         when your last login session ends. Fix with:\n"
+            f"           sudo loginctl enable-linger {user}",
+            file=sys.stderr,
+        )
+
+
 def cmd_daemon(args) -> int:
     if args.action == "run":
         from .daemon import main as daemon_main
 
         return daemon_main()
     if args.action == "start":
+        _ensure_linger()
         _write_unit()
         if _systemctl("daemon-reload") != 0:
             raise CliError(

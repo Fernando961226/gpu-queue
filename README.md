@@ -50,6 +50,11 @@ installed it's used for speed; it is never required.
   accumulate for it.
 - **Robust.** Cancel kills the whole process tree; jobs survive daemon
   restarts (the daemon reconciles the DB against live pids on startup).
+- **Survives logout.** `gq daemon start` enables systemd linger, so the daemon
+  keeps dispatching after you disconnect and comes back on reboot. Without it
+  the user manager — and the queue — stops with your last SSH session. If
+  polkit refuses, `gq` says so and you finish with
+  `sudo loginctl enable-linger $USER`.
 
 State lives in `~/.gpu-queue/` (SQLite DB + per-job logs).
 
