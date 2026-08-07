@@ -14,8 +14,8 @@ the extension on the remote, where it talks to the daemon over localhost.
 cd extension
 npm install
 npm run compile
-npm run package                 # -> gpu-queue-0.1.0.vsix
-code --install-extension gpu-queue-0.1.0.vsix   # in the Remote-SSH window
+npm run package                 # -> gpu-queue-0.2.0.vsix
+code --install-extension gpu-queue-0.2.0.vsix   # in the Remote-SSH window
 ```
 
 ## Use

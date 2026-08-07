@@ -134,14 +134,26 @@ else
     PIP_ARGS=("$SOURCE")
 fi
 
+# Reinstall unconditionally for remote installs. `--upgrade` alone compares
+# version numbers, so re-running this after a change that did not bump the
+# version leaves the old code in place and the upgrade silently does nothing.
+# An editable install already points at the checkout, so it needs no such thing.
+FORCE=()
+if [ "$DEV" -eq 0 ]; then
+    FORCE=(--force-reinstall --no-deps)
+fi
+
 # uv is 10-100x faster when it happens to be present; never required.
 if command -v uv >/dev/null 2>&1; then
     say "installing gpu-queue (uv)"
-    uv pip install --quiet --python "$VENV/bin/python" --upgrade "${PIP_ARGS[@]}"
+    uv pip install --quiet --python "$VENV/bin/python" --upgrade "${FORCE[@]}" "${PIP_ARGS[@]}"
+    [ "$DEV" -eq 0 ] && uv pip install --quiet --python "$VENV/bin/python" "${PIP_ARGS[@]}"
 else
     say "installing gpu-queue (pip)"
     "$VENV/bin/python" -m pip install --quiet --upgrade pip >/dev/null
-    "$VENV/bin/python" -m pip install --quiet --upgrade "${PIP_ARGS[@]}"
+    "$VENV/bin/python" -m pip install --quiet --upgrade "${FORCE[@]}" "${PIP_ARGS[@]}"
+    # --no-deps above skips dependency resolution, so make sure they are present.
+    [ "$DEV" -eq 0 ] && "$VENV/bin/python" -m pip install --quiet "${PIP_ARGS[@]}"
 fi
 
 # -- expose the commands -----------------------------------------------------

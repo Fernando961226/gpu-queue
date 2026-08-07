@@ -2,7 +2,7 @@
   "name": "gpu-queue",
   "displayName": "gpu-queue",
   "description": "Job queue for a shared GPU machine: queue tree, live logs, cancel/requeue",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "fernando",
   "license": "MIT",
   "engines": {
