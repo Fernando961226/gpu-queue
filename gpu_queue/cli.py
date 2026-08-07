@@ -357,7 +357,11 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--name", default=None, help="job name")
     sp.add_argument("command", nargs=argparse.REMAINDER,
                     help="job script, or -- followed by the command")
-    sp.add_argument("--vram", default=None, help="vram max vram that the job can utilize to stack more runs per gpu. Eg: 12G")
+    sp.add_argument("--vram", default=None,
+                    help="share a GPU: reserve this much VRAM (e.g. 12G, 512M) "
+                         "instead of taking the whole card. Declare what "
+                         "nvidia-smi shows for your process, plus ~20%% - a job "
+                         "that exceeds its budget is killed")
     sp.set_defaults(fn=cmd_submit)
 
     lp = sub.add_parser("ls", help="list jobs (active + recently finished)")
