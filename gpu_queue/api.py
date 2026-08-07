@@ -14,14 +14,18 @@ Endpoints (all JSON unless noted):
 """
 
 import json
+import logging
 import re
 import threading
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
 
 from . import __version__, api_port
 
 MAX_LOG_CHUNK = 512 * 1024
+
+log = logging.getLogger("gqd.api")
 
 
 class ApiError(Exception):
@@ -106,7 +110,16 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:
             pass
         except Exception as e:  # don't let one request kill the thread
-            self._json({"error": f"internal error: {e}"}, status=500)
+            # A 500 means a bug in the daemon, so keep the traceback: log it
+            # here (journalctl --user -u gpu-queue) and return it too. Leaking
+            # internals is normally a bad idea, but this API is bound to
+            # localhost for a single user, and without it every crash reads as
+            # a bare "internal error" with no file or line to go on.
+            log.exception("unhandled error in %s %s", method, self.path)
+            self._json(
+                {"error": f"internal error: {e}", "traceback": traceback.format_exc()},
+                status=500,
+            )
 
     # -- endpoints -----------------------------------------------------------
 
@@ -132,6 +145,7 @@ class Handler(BaseHTTPRequestHandler):
             env=body["env"],
             gpus=int(body.get("gpus", 1)),
             conda_env=body.get("conda_env"),
+            vram_mb=body.get("vram_mb"),
         )
         self._json(job.to_dict(), status=201)
 

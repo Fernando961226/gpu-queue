@@ -41,7 +41,15 @@ class Daemon:
 
     # -- actions (called from API threads and the loop) ---------------------
 
-    def submit(self, name, command, workdir, env, gpus, conda_env=None) -> Job:
+    def submit(self, name, command, workdir, env, gpus, conda_env=None, vram_mb=None) -> Job:
+
+        if vram_mb is not None:
+            if gpus>1:
+                raise ValueError("--vram jobs use exactly one GPU")
+            biggest = max((g.mem_total_mb for g in self.last_gpu_snapshot), default=0)
+            if vram_mb > biggest:
+                    raise ValueError(f"job wants {vram_mb} MiB but the largest GPU has {biggest} MiB")
+
         if gpus < 0:
             raise ValueError("gpus must be >= 0")
         total = len(self.last_gpu_snapshot)
@@ -54,7 +62,7 @@ class Daemon:
         if not os.path.isdir(workdir):
             raise ValueError(f"workdir does not exist: {workdir}")
         with self.lock:
-            job = self.db.add_job(name, command, workdir, env, gpus, conda_env)
+            job = self.db.add_job(name, command, workdir, env, gpus, conda_env, vram_mb)
         log.info("job %d submitted: %s (gpus=%d)", job.id, name, gpus)
         return job
 

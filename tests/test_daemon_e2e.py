@@ -6,6 +6,7 @@ import os
 import socket
 import threading
 import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -47,6 +48,19 @@ def gq(tmp_path, monkeypatch):
     t.join(timeout=5)
 
 
+class ApiFailure(AssertionError):
+    """A non-2xx response, carrying the daemon's own error text.
+
+    Subclasses AssertionError so pytest reports it as a plain test failure,
+    and keeps `.code` so tests can assert on the status.
+    """
+
+    def __init__(self, method, path, code, body):
+        self.code = code
+        self.body = body
+        super().__init__(f"{method} {path} -> {code}: {body}")
+
+
 def api(method, path, body=None):
     from gpu_queue import api_url
 
@@ -54,8 +68,14 @@ def api(method, path, body=None):
     req = urllib.request.Request(api_url() + path, data=data, method=method)
     if data:
         req.add_header("Content-Type", "application/json")
-    with urllib.request.urlopen(req, timeout=10) as resp:
-        return json.loads(resp.read())
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        # The daemon puts the real reason in the body (api.py catches and
+        # serializes it); HTTPError carries only the status line, so without
+        # this every failure reads as a bare "500 Internal Server Error".
+        raise ApiFailure(method, path, e.code, e.read().decode()) from None
 
 
 def submit(command, gpus=1, name="test", workdir=None):
@@ -135,9 +155,7 @@ def test_straggler_children_killed_when_script_exits(gq):
 
 
 def test_submit_more_gpus_than_machine_rejected(gq):
-    import urllib.error
-
-    with pytest.raises(urllib.error.HTTPError) as exc:
+    with pytest.raises(ApiFailure) as exc:
         submit(["true"], gpus=99)
     assert exc.value.code == 400
 

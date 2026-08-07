@@ -19,7 +19,7 @@ from typing import Dict
 _DIRECTIVE_RE = re.compile(r"^#GQ\s+(.*)$")
 _KV_RE = re.compile(r"([A-Za-z_-]+)=(\"[^\"]*\"|'[^']*'|\S+)")
 
-KNOWN_KEYS = {"gpus", "name", "workdir"}
+KNOWN_KEYS = {"gpus", "name", "workdir", "vram"}
 
 
 class JobScriptError(ValueError):
@@ -58,6 +58,28 @@ def parse_directives(text: str) -> Dict[str, str]:
         if n < 0:
             raise JobScriptError("gpus must be >= 0")
     return out
+
+
+def parse_size(text: str) -> int:
+    text = text.strip() 
+    m = re.fullmatch(r"(\d+)(\w*)", text)
+    if m==None:
+        raise JobScriptError(f"invalid format: {text!r}, vram must be > 0 Examples: 12G, 12GB, 12GiB, 12g, 8192M or 8192MiB")
+    size = m.group(1)   # '12'
+    unit = m.group(2)  # 'GB'
+    
+    size=int(size)
+    if size <=0:
+        raise JobScriptError(f"invalid format: {text!r}, vram must be > 0 Examples: 12G, 12GB, 12GiB, 12g, 8192M or 8192MiB")
+
+    if unit.lower()=='g' or unit.lower()=="gib" or unit.lower()=="gb":
+        return size*1024
+
+    if unit.lower()=='m' or unit.lower()=="mib" or unit.lower()=="mb" or unit.lower()=="":
+        return size
+    else:
+        raise JobScriptError(f"invalid format: {text!r}, vram must be > 0 Examples: 12G, 12GB, 12GiB, 12g, 8192M or 8192MiB")
+
 
 
 def parse_file(path: Path) -> Dict[str, str]:

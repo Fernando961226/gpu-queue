@@ -41,7 +41,8 @@ CREATE TABLE IF NOT EXISTS jobs (
     exit_code           INTEGER,
     log_path            TEXT,
     cancel_requested_at REAL,
-    note                TEXT                    -- human-readable detail (failures etc.)
+    note                TEXT,                    -- human-readable detail (failures etc.)
+    vram_mb             INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_jobs_state ON jobs(state);
 """
@@ -66,6 +67,7 @@ class Job:
     log_path: Optional[str] = None
     cancel_requested_at: Optional[float] = None
     note: Optional[str] = None
+    vram_mb: Optional[int] = None
 
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
@@ -91,6 +93,7 @@ def _row_to_job(row: sqlite3.Row) -> Job:
         log_path=row["log_path"],
         cancel_requested_at=row["cancel_requested_at"],
         note=row["note"],
+        vram_mb=row["vram_mb"],
     )
 
 
@@ -118,12 +121,13 @@ class Database:
         env: Dict[str, str],
         gpus_requested: int,
         conda_env: Optional[str] = None,
+        vram_mb: Optional[int] = None,
     ) -> Job:
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO jobs (name, command, workdir, env, conda_env,"
-                " gpus_requested, state, submitted_at)"
-                " VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                " gpus_requested, state, submitted_at, vram_mb)"
+                " VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
                     name,
                     json.dumps(command),
@@ -133,6 +137,7 @@ class Database:
                     gpus_requested,
                     QUEUED,
                     time.time(),
+                    vram_mb
                 ),
             )
             self._conn.commit()

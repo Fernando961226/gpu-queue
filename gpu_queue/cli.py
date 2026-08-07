@@ -12,7 +12,7 @@ import urllib.request
 from pathlib import Path
 
 from . import __version__, api_url, gq_home
-from .jobscript import JobScriptError, parse_file
+from .jobscript import JobScriptError, parse_file, parse_size
 
 # environment variables that describe the submitting shell, not the job
 _ENV_SKIP = {"CUDA_VISIBLE_DEVICES", "GQ_JOB_ID", "GQ_EXIT_FILE"}
@@ -99,6 +99,7 @@ def cmd_submit(args) -> int:
     gpus = args.gpus
     name = args.name
     workdir = os.getcwd()
+    vram = args.vram
 
     if not command:
         raise CliError("no command given (use `gq submit -- CMD ...` or `gq submit job.sh`)")
@@ -110,6 +111,8 @@ def cmd_submit(args) -> int:
             directives = parse_file(script)
         except JobScriptError as e:
             raise CliError(f"{script}: {e}")
+        if vram is None and "vram" in directives:
+            vram = directives["vram"]
         if gpus is None and "gpus" in directives:
             gpus = int(directives["gpus"])
         if name is None:
@@ -119,6 +122,11 @@ def cmd_submit(args) -> int:
         command = ["/bin/bash", str(script.resolve())] + command[1:]
         if name is None:
             name = script.stem
+
+    try:
+        vram_mb = parse_size(vram) if vram is not None else None
+    except JobScriptError as e:
+        raise CliError(str(e))
 
     if gpus is None:
         gpus = 1
@@ -133,6 +141,7 @@ def cmd_submit(args) -> int:
             "env": env,
             "gpus": gpus,
             "conda_env": os.environ.get("CONDA_DEFAULT_ENV"),
+            "vram_mb":vram_mb
         },
     )
     print(f"Submitted job {job['id']} ({job['name']}), {job['gpus_requested']} gpu(s)")
@@ -323,6 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--name", default=None, help="job name")
     sp.add_argument("command", nargs=argparse.REMAINDER,
                     help="job script, or -- followed by the command")
+    sp.add_argument("--vram", default=None, help="vram max vram that the job can utilize to stack more runs per gpu. Eg: 12G")
     sp.set_defaults(fn=cmd_submit)
 
     lp = sub.add_parser("ls", help="list jobs (active + recently finished)")
