@@ -103,6 +103,15 @@ def _row_to_job(row: sqlite3.Row) -> Job:
     )
 
 
+# Columns added after the first release. _SCHEMA is CREATE TABLE IF NOT EXISTS,
+# so on an existing database it does nothing and new columns must be ALTERed in
+# -- without this an upgraded daemon dies reading a column that isn't there.
+# Existing rows get NULL, which every added column must treat as "old default".
+_MIGRATIONS = (
+    ("vram_mb", "ALTER TABLE jobs ADD COLUMN vram_mb INTEGER"),
+)
+
+
 class Database:
     def __init__(self, path: Path):
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,8 +119,16 @@ class Database:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA journal_mode=WAL")
         self._conn.executescript(_SCHEMA)
+        self._migrate()
         self._conn.commit()
         self._lock = threading.RLock()
+
+    def _migrate(self) -> None:
+        """Add columns missing from an older database (see _MIGRATIONS)."""
+        have = {r["name"] for r in self._conn.execute("PRAGMA table_info(jobs)")}
+        for column, sql in _MIGRATIONS:
+            if column not in have:
+                self._conn.execute(sql)
 
     def close(self) -> None:
         with self._lock:
