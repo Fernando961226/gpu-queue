@@ -18,16 +18,29 @@ export interface Job {
   exit_code: number | null;
   log_path: string | null;
   note: string | null;
+  /** Declared VRAM budget; null means the job holds whole GPUs exclusively. */
+  vram_mb: number | null;
+}
+
+export interface Tenant {
+  job_id: number;
+  name: string;
+  vram_mb: number | null;
 }
 
 export interface Gpu {
   index: number;
   name: string;
   state: "free" | "allocated" | "external";
+  /** First tenant, kept for compatibility; prefer `tenants`. */
   job_id: number | null;
+  tenants: Tenant[];
   mem_used_mb: number;
   mem_total_mb: number;
   util_pct: number;
+  /** Schedulable VRAM (total minus headroom) and how much is reserved. */
+  vram_capacity_mb: number;
+  vram_reserved_mb: number;
 }
 
 export interface LogChunk {

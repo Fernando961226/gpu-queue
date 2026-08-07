@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional
+from collections import defaultdict
 
 # Job lifecycle: QUEUED -> RUNNING -> DONE | FAILED | CANCELLED
 QUEUED = "QUEUED"
@@ -72,6 +73,11 @@ class Job:
     def to_dict(self) -> dict:
         d = self.__dict__.copy()
         return d
+
+@dataclass
+class Tenant:
+    job_id: int
+    vram_mb: Optional[int] = None
 
 
 def _row_to_job(row: sqlite3.Row) -> Job:
@@ -215,10 +221,12 @@ class Database:
             rows = self._conn.execute(sql, args).fetchall()
         return [_row_to_job(r) for r in rows]
 
-    def assigned_gpus(self) -> Dict[int, int]:
+    def assigned_gpus(self) -> Dict[int, list[Tenant]]:
         """Map of gpu index -> job id for RUNNING jobs (the allocation ledger)."""
-        ledger: Dict[int, int] = {}
+        
+        ledger = defaultdict(list)
+
         for job in self.jobs_in_state(RUNNING):
             for g in job.gpu_ids or []:
-                ledger[g] = job.id
-        return ledger
+                ledger[g].append(Tenant(job_id=job.id,vram_mb=job.vram_mb))
+        return dict(ledger)

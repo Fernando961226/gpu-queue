@@ -76,6 +76,15 @@ def _fmt_duration(seconds: float) -> str:
     return f"{d}d{h:02d}h"
 
 
+def _fmt_mb(mb: int) -> str:
+    """MiB as a compact size: 8192 -> '8G', 512 -> '512M'."""
+    if mb >= 1024 and mb % 1024 == 0:
+        return f"{mb // 1024}G"
+    if mb >= 1024:
+        return f"{mb / 1024:.1f}G"
+    return f"{mb}M"
+
+
 def _job_runtime(job: dict) -> str:
     if job["started_at"] is None:
         return "-"
@@ -162,6 +171,8 @@ def cmd_ls(args) -> int:
     rows = []
     for j in jobs:
         gpu = ",".join(map(str, j["gpu_ids"])) if j["gpu_ids"] else f"({j['gpus_requested']} wanted)"
+        if j.get("vram_mb"):
+            gpu += f" [{_fmt_mb(j['vram_mb'])}]"  # share job: GPU is not exclusive
         exit_str = "" if j["exit_code"] is None else str(j["exit_code"])
         rows.append([j["id"], j["name"], j["state"], gpu, _job_runtime(j), exit_str,
                      j["conda_env"] or ""])
@@ -209,12 +220,26 @@ def cmd_gpus(args) -> int:
     gpus = _get("/api/gpus")
     rows = []
     for g in gpus:
-        holder = f"job {g['job_id']}" if g["job_id"] is not None else ""
+        tenants = g.get("tenants") or []
+        if tenants:
+            holder = ", ".join(
+                f"#{t['job_id']} {t['name']}"
+                + (f" [{_fmt_mb(t['vram_mb'])}]" if t["vram_mb"] else "")
+                for t in tenants
+            )
+        elif g["state"] == "external":
+            holder = "another user"
+        else:
+            holder = ""
+        capacity = g.get("vram_capacity_mb") or 0
+        reserved = g.get("vram_reserved_mb") or 0
         rows.append([
-            g["index"], g["name"], g["state"], holder,
+            g["index"], g["name"], g["state"],
+            f"{_fmt_mb(reserved)}/{_fmt_mb(capacity)}" if capacity else "-",
             f"{g['mem_used_mb']}/{g['mem_total_mb']}MB", f"{g['util_pct']}%",
+            holder,
         ])
-    _print_table(rows, ["GPU", "NAME", "STATE", "JOB", "MEM", "UTIL"])
+    _print_table(rows, ["GPU", "NAME", "STATE", "RESERVED", "MEM", "UTIL", "JOBS"])
     return 0
 
 

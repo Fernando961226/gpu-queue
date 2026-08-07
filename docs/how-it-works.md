@@ -72,6 +72,54 @@ Every cycle:
    GPUs are reserved for it so they can accumulate (starvation guard). Only
    the first blocked job gets reservation rights.
 
+## GPU sharing
+
+`--vram 12G` submits a *share* job: it takes room on one GPU rather than the
+whole card, so several small jobs can run on one A6000 instead of one job
+holding 48GB to use 4GB.
+
+Each dispatchable GPU becomes a `GpuSlot`:
+
+```
+free_mb = mem_total_mb - GQ_VRAM_HEADROOM_MB - Σ(tenant.vram_mb + GQ_VRAM_OVERHEAD_MB)
+empty   = no gpu-queue job on it at all
+```
+
+- **Capacity is charged against declared budgets, never live NVML readings.**
+  A job that has not allocated yet would otherwise look free, and the GPU
+  would be overcommitted. Same principle as the ledger: what we promised is
+  authoritative, what NVML sees is advisory.
+- **Exclusive jobs need `empty` slots; share jobs need `free_mb`.** They never
+  mix: an exclusive job declared no budget, so there is no number to subtract
+  from the card's capacity.
+- **Share placement is best-fit** — the tightest slot that fits — so empty
+  cards stay empty for exclusive jobs instead of every card picking up one
+  small tenant.
+- **Headroom** (1024MB) covers the ~600MB the driver reserves on an A6000 plus
+  slack. **Overhead** (256MB) is per-tenant variance margin; `--vram` is meant
+  to be the whole `nvidia-smi` figure for the process, context included.
+- Externally-busy GPUs are excluded outright, exactly as before. Modelling
+  another user's growing footprint would take our packed jobs down with it.
+
+### Policing
+
+Declared budgets are an honour system — nothing outside a process can cap its
+VRAM — and the failure mode is unfair: CUDA allocates first-come-first-served,
+so an over-running job usually survives while its correctly-declared neighbour
+takes the OOM. So the daemon enforces:
+
+- `vram_violations()` maps NVML compute pids → pgid → job (the same machinery
+  `externally_busy()` uses) and sums each share job's processes.
+- Over `vram_mb + GQ_VRAM_OVERHEAD_MB` for `GQ_VRAM_STRIKES` (3) *consecutive*
+  cycles → evicted. One reading can catch a transient spike; a job genuinely
+  over stays over.
+- Eviction reuses the cancel path (SIGTERM, then SIGKILL after the grace
+  period), but `_finalize` marks it **FAILED**, not CANCELLED, with a note
+  naming the numbers and telling the user what to resubmit with.
+- **Fails open.** NVML reports per-process memory as `None` under some driver
+  configurations; a job that cannot be measured is never killed.
+- Exclusive jobs are not policed — they own the card.
+
 The ledger is authoritative for our own allocations — two gpu-queue jobs can
 never share a GPU. The NVML check is advisory and only guards against
 *external* users; it is not used for our own accounting (no racy
@@ -90,8 +138,8 @@ by design.
 | GET    | `/api/jobs`             | `?state=QUEUED,RUNNING&limit=N`, newest first |
 | GET    | `/api/jobs/<id>`        | full job record                          |
 | GET    | `/api/jobs/<id>/logs`   | `?offset=N`, text/plain, ≤512KB chunks; `X-Log-Offset` = next offset, `X-Job-State` for tail termination |
-| GET    | `/api/gpus`             | per-GPU: state free/allocated/external, mem, util, job id |
-| POST   | `/api/submit`           | `{name?, command[], workdir, env{}, gpus, conda_env?}` |
+| GET    | `/api/gpus`             | per-GPU: state, mem, util, `tenants[]`, `vram_reserved_mb`/`vram_capacity_mb` |
+| POST   | `/api/submit`           | `{name?, command[], workdir, env{}, gpus, conda_env?, vram_mb?}` |
 | POST   | `/api/jobs/<id>/cancel` | queued → CANCELLED; running → SIGTERM + grace |
 | POST   | `/api/jobs/<id>/requeue`| finished jobs only; same id, back of queue |
 | POST   | `/api/shutdown`         | stop the daemon (jobs keep running)      |

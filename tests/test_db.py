@@ -1,13 +1,14 @@
 from gpu_queue import db as dbm
-from gpu_queue.db import Database
+from gpu_queue.db import Database, Tenant
 
 
 def make_db(tmp_path):
     return Database(tmp_path / "db.sqlite")
 
 
-def add(db, name="j", gpus=1):
-    return db.add_job(name, ["echo", "hi"], "/tmp", {"PATH": "/bin"}, gpus)
+def add(db, name="j", gpus=1, vram_mb=None):
+    return db.add_job(name, ["echo", "hi"], "/tmp", {"PATH": "/bin"}, gpus,
+                      vram_mb=vram_mb)
 
 
 def test_add_and_get(tmp_path):
@@ -25,12 +26,41 @@ def test_lifecycle_and_ledger(tmp_path):
     db = make_db(tmp_path)
     j1, j2 = add(db), add(db)
     db.mark_running(j1.id, pid=1234, gpu_ids=[0, 1], log_path="/tmp/x.log")
-    assert db.assigned_gpus() == {0: j1.id, 1: j1.id}
+    assert db.assigned_gpus() == {0: [Tenant(j1.id)], 1: [Tenant(j1.id)]}
     db.mark_finished(j1.id, dbm.DONE, 0)
     assert db.assigned_gpus() == {}
     got = db.get_job(j1.id)
     assert got.state == dbm.DONE and got.exit_code == 0
     assert db.jobs_in_state(dbm.QUEUED)[0].id == j2.id
+
+
+def test_vram_mb_round_trips(tmp_path):
+    db = make_db(tmp_path)
+    assert db.get_job(add(db, vram_mb=8192).id).vram_mb == 8192
+    assert db.get_job(add(db).id).vram_mb is None  # NULL == exclusive job
+
+
+def test_ledger_tracks_multiple_tenants(tmp_path):
+    # The old Dict[gpu, job_id] ledger could not express this: the second job
+    # would have overwritten the first.
+    db = make_db(tmp_path)
+    j1 = add(db, name="share-a", vram_mb=8192)
+    j2 = add(db, name="share-b", vram_mb=4096)
+    db.mark_running(j1.id, pid=1, gpu_ids=[0], log_path="/tmp/a.log")
+    db.mark_running(j2.id, pid=2, gpu_ids=[0], log_path="/tmp/b.log")
+    assert db.assigned_gpus() == {
+        0: [Tenant(j1.id, 8192), Tenant(j2.id, 4096)],
+    }
+
+
+def test_ledger_drops_tenant_when_job_finishes(tmp_path):
+    db = make_db(tmp_path)
+    j1 = add(db, vram_mb=8192)
+    j2 = add(db, vram_mb=4096)
+    db.mark_running(j1.id, pid=1, gpu_ids=[0], log_path="/tmp/a.log")
+    db.mark_running(j2.id, pid=2, gpu_ids=[0], log_path="/tmp/b.log")
+    db.mark_finished(j1.id, dbm.DONE, 0)
+    assert db.assigned_gpus() == {0: [Tenant(j2.id, 4096)]}
 
 
 def test_requeue_resets(tmp_path):

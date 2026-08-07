@@ -53,11 +53,17 @@ function runtime(job: Job): string {
 
 function describe(job: Job): string {
   const parts: string[] = [];
+  // A share job's GPU is not exclusively its own, so say what it reserved.
+  const budget = job.vram_mb ? ` [${(job.vram_mb / 1024).toFixed(1)}G]` : "";
   if (job.state === "RUNNING" && job.gpu_ids) {
-    parts.push(`gpu ${job.gpu_ids.join(",")}`);
+    parts.push(`gpu ${job.gpu_ids.join(",")}${budget}`);
     parts.push(runtime(job));
   } else if (job.state === "QUEUED") {
-    parts.push(`wants ${job.gpus_requested} gpu${job.gpus_requested === 1 ? "" : "s"}`);
+    parts.push(
+      budget
+        ? `wants ${budget.trim()} on a gpu`
+        : `wants ${job.gpus_requested} gpu${job.gpus_requested === 1 ? "" : "s"}`
+    );
   } else {
     parts.push(job.state.toLowerCase());
     if (job.exit_code !== null && job.exit_code !== 0) {

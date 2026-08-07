@@ -12,8 +12,23 @@ so the extension talks to the daemon over localhost).
 ## Locked-in design decisions
 
 - **Single machine.** No SSH dispatch. Install the tool per-machine if needed.
-- **GPU request = count only** (`--gpus N`). No VRAM matching, no fractional
-  sharing. GPUs on the box are treated as interchangeable.
+- **Two ways to request GPU.** `--gpus N` takes whole GPUs exclusively (the
+  default, and the original design). `--vram 12G` instead declares a VRAM
+  budget and takes *part* of one GPU, so several small jobs can share a card —
+  a 48GB A6000 sitting reserved for a 4GB job was the waste that motivated it.
+  GPUs are otherwise interchangeable; there is still no fractional *compute*
+  partitioning (no MIG, no MPS).
+  - Exclusive and share jobs never mix on a card. An exclusive job declared no
+    budget, so there is no number to subtract.
+  - Capacity is charged against **declared budgets**, never live NVML readings:
+    a job that has not allocated yet would otherwise look free.
+  - `--vram` means what `nvidia-smi` shows for the process (CUDA context
+    included), not what the tensors alone weigh.
+  - Declared budgets are policed. CUDA hands out memory first-come-first-served,
+    so an over-running job usually survives while its correctly-declared
+    neighbour takes the OOM; the daemon evicts the over-runner instead (3
+    consecutive cycles over budget → SIGTERM → FAILED with a note). Enforcement
+    fails open: a job NVML cannot measure is never killed.
 - **Availability = queue ledger + live NVML check.** chai is shared with other
   users who do NOT use this tool. A GPU is dispatchable only if (a) the
   daemon's own allocation ledger says it's free AND (b) NVML shows no external

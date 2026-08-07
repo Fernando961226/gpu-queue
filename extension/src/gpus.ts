@@ -1,7 +1,7 @@
 /** The GPUs tree: one row per GPU with a utilisation bar and its owning job. */
 
 import * as vscode from "vscode";
-import { Gpu, Job } from "./api";
+import { Gpu, Job, Tenant } from "./api";
 
 const BAR_CELLS = 10;
 const SPARK = "▁▂▃▄▅▆▇█";
@@ -26,11 +26,23 @@ function gib(mb: number): string {
   return (mb / 1024).toFixed(1);
 }
 
-function owner(gpu: Gpu, jobs: Map<number, Job>): string {
+function tenantLabel(t: Tenant): string {
+  const budget = t.vram_mb === null ? "" : ` [${gib(t.vram_mb)}G]`;
+  return `#${t.job_id} ${t.name}${budget}`;
+}
+
+function owner(gpu: Gpu): string {
   if (gpu.state === "external") return "external";
-  if (gpu.job_id === null) return "free";
-  const job = jobs.get(gpu.job_id);
-  return job ? `#${job.id} ${job.name}` : `#${gpu.job_id}`;
+  const tenants = gpu.tenants ?? [];
+  if (!tenants.length) return "free";
+  // One tenant reads better named; several would overflow the row.
+  return tenants.length === 1 ? tenantLabel(tenants[0]) : `${tenants.length} jobs`;
+}
+
+/** Fraction of schedulable VRAM already reserved, 0-100. */
+function reservedPct(gpu: Gpu): number {
+  if (!gpu.vram_capacity_mb) return 0;
+  return (gpu.vram_reserved_mb / gpu.vram_capacity_mb) * 100;
 }
 
 function icon(gpu: Gpu): vscode.ThemeIcon {
@@ -51,7 +63,7 @@ export class GpuItem extends vscode.TreeItem {
     this.description =
       `${bar(gpu.util_pct)} ${clampPct(gpu.util_pct)}%` +
       ` · ${gib(gpu.mem_used_mb)}/${gib(gpu.mem_total_mb)} GiB` +
-      ` · ${owner(gpu, jobs)}`;
+      ` · ${owner(gpu)}`;
     this.tooltip = tooltip(gpu, history, jobs);
     this.iconPath = icon(gpu);
     this.contextValue = `gpu-${gpu.state}`;
@@ -66,11 +78,26 @@ function tooltip(gpu: Gpu, history: number[], jobs: Map<number, Job>): vscode.Ma
   md.appendMarkdown(`vram: ${gib(gpu.mem_used_mb)} / ${gib(gpu.mem_total_mb)} GiB\n\n`);
   if (gpu.state === "external") {
     md.appendMarkdown(`in use by another user — gq will not schedule here\n`);
-  } else if (gpu.job_id !== null) {
-    const job = jobs.get(gpu.job_id);
-    md.appendMarkdown(`job: ${job ? `#${job.id} ${job.name}` : `#${gpu.job_id}`}\n`);
-  } else {
+    return md;
+  }
+  const tenants = gpu.tenants ?? [];
+  if (gpu.vram_capacity_mb) {
+    // Reserved is what jobs *declared*, which is what the scheduler allocates
+    // against — deliberately not the live NVML reading above.
+    md.appendMarkdown(
+      `reserved: \`${bar(reservedPct(gpu))}\` ` +
+        `${gib(gpu.vram_reserved_mb)} / ${gib(gpu.vram_capacity_mb)} GiB\n\n`
+    );
+  }
+  if (!tenants.length) {
     md.appendMarkdown(`free\n`);
+  } else if (tenants.some((t) => t.vram_mb === null)) {
+    md.appendMarkdown(`exclusive: ${tenants.map(tenantLabel).join(", ")}\n`);
+  } else {
+    md.appendMarkdown(`sharing (${tenants.length}):\n\n`);
+    for (const t of tenants) {
+      md.appendMarkdown(`- ${tenantLabel(t)}\n`);
+    }
   }
   return md;
 }

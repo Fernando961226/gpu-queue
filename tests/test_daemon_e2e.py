@@ -78,13 +78,14 @@ def api(method, path, body=None):
         raise ApiFailure(method, path, e.code, e.read().decode()) from None
 
 
-def submit(command, gpus=1, name="test", workdir=None):
+def submit(command, gpus=1, name="test", workdir=None, vram_mb=None):
     return api("POST", "/api/submit", {
         "name": name,
         "command": command,
         "workdir": workdir or os.getcwd(),
         "env": dict(os.environ),
         "gpus": gpus,
+        "vram_mb": vram_mb,
     })
 
 
@@ -210,3 +211,105 @@ def test_logs_endpoint_tail(gq):
         text = resp.read().decode()
         assert "hello-tail" in text
         assert int(resp.headers["X-Log-Offset"]) == len(text.encode())
+
+
+# -- vram sharing ----------------------------------------------------------
+
+
+def test_share_jobs_pack_onto_one_gpu(gq):
+    # FakeGPU is 24000MB, so two 4G jobs comfortably share one card while the
+    # other stays empty.
+    a = submit(["sleep", "30"], name="a", vram_mb=4096)
+    b = submit(["sleep", "30"], name="b", vram_mb=4096)
+    wait_for(lambda: all(job_state(j["id"]) == dbm.RUNNING for j in (a, b)),
+             msg="both RUNNING")
+    gpus_a = api("GET", f"/api/jobs/{a['id']}")["gpu_ids"]
+    gpus_b = api("GET", f"/api/jobs/{b['id']}")["gpu_ids"]
+    assert gpus_a == gpus_b, "share jobs should land on the same GPU (best-fit)"
+
+
+def test_exclusive_job_avoids_shared_gpu(gq):
+    share = submit(["sleep", "30"], name="share", vram_mb=4096)
+    wait_for(lambda: job_state(share["id"]) == dbm.RUNNING, msg="share RUNNING")
+    shared_gpu = api("GET", f"/api/jobs/{share['id']}")["gpu_ids"][0]
+
+    excl = submit(["sleep", "30"], name="excl", gpus=1)
+    wait_for(lambda: job_state(excl["id"]) == dbm.RUNNING, msg="exclusive RUNNING")
+    assert api("GET", f"/api/jobs/{excl['id']}")["gpu_ids"] != [shared_gpu]
+
+
+def test_share_job_waits_when_no_capacity(gq):
+    # 2 fake GPUs of 24000MB; headroom leaves ~23000 each. A 20G job on each
+    # fills both, so a third has nowhere to go.
+    for i in range(2):
+        submit(["sleep", "30"], name=f"big{i}", vram_mb=20 * 1024)
+    wait_for(lambda: len(gq.db.jobs_in_state(dbm.RUNNING)) == 2, msg="two RUNNING")
+    late = submit(["sleep", "30"], name="late", vram_mb=20 * 1024)
+    time.sleep(0.5)
+    assert job_state(late["id"]) == dbm.QUEUED
+
+
+def test_vram_over_budget_job_is_evicted(gq, monkeypatch):
+    monkeypatch.setattr(daemon_mod, "VRAM_STRIKES", 2)
+    job = submit(["sleep", "30"], name="hog", vram_mb=1024)
+    wait_for(lambda: job_state(job["id"]) == dbm.RUNNING, msg="RUNNING")
+
+    # Pretend NVML sees this job's process group using far more than declared.
+    got = api("GET", f"/api/jobs/{job['id']}")
+    gq.monitor.fake_procs[got["gpu_ids"][0]] = {got["pid"]: 20_000}
+
+    wait_for(lambda: job_state(job["id"]) == dbm.FAILED, msg="evicted", timeout=15)
+    got = api("GET", f"/api/jobs/{job['id']}")
+    assert "evicted" in (got["note"] or "")
+    assert got["state"] == dbm.FAILED  # not CANCELLED: the user did not cancel
+
+
+def test_vram_within_budget_is_not_evicted(gq, monkeypatch):
+    monkeypatch.setattr(daemon_mod, "VRAM_STRIKES", 2)
+    job = submit(["sleep", "3"], name="honest", vram_mb=8192)
+    wait_for(lambda: job_state(job["id"]) == dbm.RUNNING, msg="RUNNING")
+    got = api("GET", f"/api/jobs/{job['id']}")
+    gq.monitor.fake_procs[got["gpu_ids"][0]] = {got["pid"]: 8000}  # under budget
+    wait_for(lambda: job_state(job["id"]) == dbm.DONE, msg="DONE", timeout=15)
+
+
+def test_unmeasurable_vram_never_evicts(gq, monkeypatch):
+    monkeypatch.setattr(daemon_mod, "VRAM_STRIKES", 2)
+    job = submit(["sleep", "3"], name="opaque", vram_mb=1024)
+    wait_for(lambda: job_state(job["id"]) == dbm.RUNNING, msg="RUNNING")
+    got = api("GET", f"/api/jobs/{job['id']}")
+    gq.monitor.fake_procs[got["gpu_ids"][0]] = {got["pid"]: None}  # NVML cannot read it: must fail open
+    wait_for(lambda: job_state(job["id"]) == dbm.DONE, msg="DONE", timeout=15)
+
+
+def test_exclusive_job_is_not_policed(gq, monkeypatch):
+    monkeypatch.setattr(daemon_mod, "VRAM_STRIKES", 2)
+    job = submit(["sleep", "3"], name="excl", gpus=1)
+    wait_for(lambda: job_state(job["id"]) == dbm.RUNNING, msg="RUNNING")
+    got = api("GET", f"/api/jobs/{job['id']}")
+    gq.monitor.fake_procs[got["gpu_ids"][0]] = {got["pid"]: 23_000}  # owns the card, so this is fine
+    wait_for(lambda: job_state(job["id"]) == dbm.DONE, msg="DONE", timeout=15)
+
+
+def test_submit_vram_with_multiple_gpus_rejected(gq):
+    with pytest.raises(ApiFailure) as exc:
+        submit(["true"], gpus=2, vram_mb=4096)
+    assert exc.value.code == 400
+    assert "one GPU" in exc.value.body
+
+
+def test_submit_vram_larger_than_any_gpu_rejected(gq):
+    with pytest.raises(ApiFailure) as exc:
+        submit(["true"], vram_mb=999_999)
+    assert exc.value.code == 400
+
+
+def test_gpus_endpoint_reports_tenants(gq):
+    job = submit(["sleep", "30"], name="tenant", vram_mb=4096)
+    wait_for(lambda: job_state(job["id"]) == dbm.RUNNING, msg="RUNNING")
+    gpus = api("GET", "/api/gpus")
+    holding = [g for g in gpus if g["tenants"]]
+    assert len(holding) == 1
+    (t,) = holding[0]["tenants"]
+    assert (t["job_id"], t["name"], t["vram_mb"]) == (job["id"], "tenant", 4096)
+    assert holding[0]["vram_reserved_mb"] > 4096  # budget + overhead
